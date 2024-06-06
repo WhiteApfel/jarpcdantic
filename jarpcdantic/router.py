@@ -101,6 +101,15 @@ class JarpcClientRouter:
 
         nested_router._decorate_methods(is_nested=True)
 
+    def set_client(self, client: AsyncJarpcClient | JarpcClient) -> None:
+        self._client = client
+        for attr_name, attr_value in self.__class__.__dict__.items():
+            if attr_name.startswith("_") or isinstance(attr_value, property):
+                continue
+
+            if isinstance(attr_value, JarpcClientRouter):
+                attr_value.set_client(client)
+
     @staticmethod
     def _wrap(
         self,
