@@ -23,6 +23,17 @@ class JarpcDispatcher:
         self.method_map[f.__name__] = f
         return f
 
+    def declare_method(self, name: str | None = None):
+        """Decorator: adds `f` as RPC method.
+        `f` can retrieve JarpcRequest object through optional `jarpc_request` argument.
+        """
+
+        def decorated(f):
+            self.method_map[(name.__str__() if name else None) or f.__name__] = f
+            return f
+
+        return decorated
+
     def add_rpc_method(self, f, name=None):
         """Adds `f` as RPC method.
         If `name` is not None, it is used as method name.
@@ -31,5 +42,5 @@ class JarpcDispatcher:
         self.method_map[name or f.__name__] = f
 
     def update(self, dispatcher):
-        """Add methods from `dispatcher`, overriding on any collisions. """
+        """Add methods from `dispatcher`, overriding on any collisions."""
         self.method_map.update(dispatcher.method_map)
