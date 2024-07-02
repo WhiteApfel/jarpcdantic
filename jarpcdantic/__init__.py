@@ -19,11 +19,13 @@ from .errors import (
 )
 from .format import JarpcRequest, JarpcResponse
 from .manager import AsyncJarpcManager, JarpcManager
+from .router import JarpcClientRouter
 
 __all__ = (
     # client
     "AsyncJarpcClient",
     "JarpcClient",
+    "JarpcClientRouter",
     # dispatcher
     "JarpcDispatcher",
     # errors
@@ -49,4 +51,4 @@ __all__ = (
     "JarpcManager",
 )
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"

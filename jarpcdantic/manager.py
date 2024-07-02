@@ -5,6 +5,7 @@ from asyncio import CancelledError
 from collections import deque
 from typing import Iterable, Optional
 
+from pydantic import BaseModel
 from pydantic_core import ValidationError
 
 from .dispatcher import JarpcDispatcher
@@ -164,13 +165,32 @@ class JarpcManager:
     def _call_method(self, method, request: JarpcRequest):
         # prepare params passed from manager context
         context_params = dict()
-        if "jarpc_request" in inspect.signature(method).parameters:
+        method_sig = inspect.signature(method)
+        if "jarpc_request" in method_sig.parameters:
             context_params["jarpc_request"] = request
         for param, value in self.context.items():
             if param in inspect.signature(method).parameters:
                 context_params[param] = value
         # do call
-        return method(**request.params, **context_params)
+        result = method(**request.params, **context_params)
+
+        # get the expected return type from the method's type hints
+        return_annotation = method_sig.return_annotation
+
+        # if the return annotation is a pydantic model
+        if return_annotation is not inspect.Signature.empty and issubclass(return_annotation, BaseModel):
+            # if result is a dict, validate and return the pydantic model
+            if isinstance(result, dict):
+                return return_annotation(**result)
+            # if result is an instance of another class, try to convert it
+            elif not isinstance(result, return_annotation):
+                try:
+                    return return_annotation.model_validate(result, from_attributes=True)
+                except Exception as e:
+                    raise TypeError(f"Failed to convert return value to {return_annotation}: {e}")
+
+        # if no specific return type is expected or it is not a pydantic model, return the result as is
+        return result
 
 
 class AsyncJarpcManager(JarpcManager):
