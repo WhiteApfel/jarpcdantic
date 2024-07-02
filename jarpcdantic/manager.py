@@ -186,8 +186,8 @@ class JarpcManager:
             elif not isinstance(result, return_annotation):
                 try:
                     return return_annotation.model_validate(result, from_attributes=True)
-                except Exception as e:
-                    raise TypeError(f"Failed to convert return value to {return_annotation}: {e}")
+                except ValidationError as e:
+                    raise JarpcParseError(f"Failed to convert return value to {return_annotation}: {e}")
 
         # if no specific return type is expected or it is not a pydantic model, return the result as is
         return result
