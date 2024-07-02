@@ -178,16 +178,22 @@ class JarpcManager:
         return_annotation = method_sig.return_annotation
 
         # if the return annotation is a pydantic model
-        if return_annotation is not inspect.Signature.empty and issubclass(return_annotation, BaseModel):
+        if return_annotation is not inspect.Signature.empty and issubclass(
+            return_annotation, BaseModel
+        ):
             # if result is a dict, validate and return the pydantic model
             if isinstance(result, dict):
                 return return_annotation(**result)
             # if result is an instance of another class, try to convert it
             elif not isinstance(result, return_annotation):
                 try:
-                    return return_annotation.model_validate(result, from_attributes=True)
+                    return return_annotation.model_validate(
+                        result, from_attributes=True
+                    )
                 except ValidationError as e:
-                    raise JarpcParseError(f"Failed to convert return value to {return_annotation}: {e}")
+                    raise JarpcParseError(
+                        f"Failed to convert return value to {return_annotation}: {e}"
+                    )
 
         # if no specific return type is expected or it is not a pydantic model, return the result as is
         return result
