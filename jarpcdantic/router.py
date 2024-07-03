@@ -52,8 +52,14 @@ class JarpcClientRouter:
 
         if "_model" in attr_signature.parameters:
             model: Type[BaseModel] = attr_signature.parameters["_model"].default
-        elif len(clear_parameters) == 1 and issubclass(
-            clear_parameters[list(clear_parameters.keys())[0]].annotation, BaseModel
+        elif (
+            len(clear_parameters) == 1
+            and isinstance(
+                clear_parameters[list(clear_parameters.keys())[0]].annotation, type
+            )
+            and issubclass(
+                clear_parameters[list(clear_parameters.keys())[0]].annotation, BaseModel
+            )
         ):
             parameter = clear_parameters[list(clear_parameters.keys())[0]]
             model = parameter.annotation if parameter.annotation is not _empty else None
