@@ -3,7 +3,7 @@ import inspect
 import logging
 from asyncio import CancelledError
 from collections import deque
-from typing import Iterable, Optional
+from typing import Iterable, Optional, get_origin, Union, get_args
 
 from pydantic import BaseModel
 from pydantic_core import ValidationError
@@ -11,6 +11,7 @@ from pydantic_core import ValidationError
 from .dispatcher import JarpcDispatcher
 from .errors import JarpcError, JarpcInvalidParams, JarpcParseError, JarpcServerError
 from .format import JarpcRequest, JarpcResponse, json_dumps, json_loads
+from .utils import convert_params_to_models, process_return_value
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,20 @@ def get_args_representation(args: Iterable) -> str:
     {'b',"a"} -> "a, b"
     """
     return ", ".join(sorted(args))
+
+
+def prepare_context_params(method, request, context):
+    """
+    Подготавливает параметры контекста для вызова метода.
+    """
+    context_params = {}
+    method_sig = inspect.signature(method)
+    if "jarpc_request" in method_sig.parameters:
+        context_params["jarpc_request"] = request
+    for param, value in context.items():
+        if param in method_sig.parameters:
+            context_params[param] = value
+    return context_params, method_sig
 
 
 def check_function_call(fun, kwargs: dict, context: dict) -> (bool, Optional[str]):
@@ -162,41 +177,18 @@ class JarpcManager:
                 else None
             )
 
-    def _call_method(self, method, request: JarpcRequest):
-        # prepare params passed from manager context
-        context_params = dict()
-        method_sig = inspect.signature(method)
-        if "jarpc_request" in method_sig.parameters:
-            context_params["jarpc_request"] = request
-        for param, value in self.context.items():
-            if param in inspect.signature(method).parameters:
-                context_params[param] = value
-        # do call
-        result = method(**request.params, **context_params)
-
-        # get the expected return type from the method's type hints
+    def _call_method(self, method, request):
+        """
+        Универсальный вызов метода с обработкой результата (синхронная версия).
+        """
+        context_params, method_sig = prepare_context_params(
+            method, request, self.context
+        )
+        converted_params = convert_params_to_models(request.params, method_sig)
+        final_params = {**converted_params, **context_params}
+        result = method(**final_params)
         return_annotation = method_sig.return_annotation
-
-        # if the return annotation is a pydantic model
-        if return_annotation is not inspect.Signature.empty and issubclass(
-            return_annotation, BaseModel
-        ):
-            # if result is a dict, validate and return the pydantic model
-            if isinstance(result, dict):
-                return return_annotation(**result)
-            # if result is an instance of another class, try to convert it
-            elif not isinstance(result, return_annotation):
-                try:
-                    return return_annotation.model_validate(
-                        result, from_attributes=True
-                    )
-                except ValidationError as e:
-                    raise JarpcParseError(
-                        f"Failed to convert return value to {return_annotation}: {e}"
-                    )
-
-        # if no specific return type is expected or it is not a pydantic model, return the result as is
-        return result
+        return process_return_value(return_annotation, result)
 
 
 class AsyncJarpcManager(JarpcManager):
@@ -259,9 +251,17 @@ class AsyncJarpcManager(JarpcManager):
                 else None
             )
 
-    async def _call_method(self, method, request: JarpcRequest):
-        result = super()._call_method(method, request)
-        # if `method` is async function, `result` is coroutine
+    async def _call_method(self, method, request):
+        """
+        Универсальный вызов метода с обработкой результата (асинхронная версия).
+        """
+        context_params, method_sig = prepare_context_params(
+            method, request, self.context
+        )
+        converted_params = convert_params_to_models(request.params, method_sig)
+        final_params = {**converted_params, **context_params}
+        result = method(**final_params)
         if inspect.isawaitable(result):
             result = await result
-        return result
+        return_annotation = method_sig.return_annotation
+        return process_return_value(return_annotation, result)

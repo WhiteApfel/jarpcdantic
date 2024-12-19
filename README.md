@@ -1,1 +1,1 @@
-# JARPC — JSON Advanced RPC
+# JARPCdantic — JSON Advanced RPC with Pydantic validation
