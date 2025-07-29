@@ -1,11 +1,25 @@
 import inspect
-from inspect import _empty, Signature, Parameter
-from typing import Any, Type, Callable, Generator
+from inspect import Parameter, Signature, _empty
+from typing import Any, Callable, Generator, Type
 
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, Field, create_model
 
 from jarpcdantic import AsyncJarpcClient, JarpcClient
 from jarpcdantic.utils import process_return_value
+
+
+class UnsetType:
+    """Marker for parameters that were not explicitly set (to differentiate from None)."""
+
+    def __repr__(self):
+        return "<UNSET>"
+
+    def __bool__(self):
+        """Unset values should be treated as 'not set' in conditionals."""
+        return False
+
+
+UNSET = UnsetType()
 
 
 class JarpcClientRouter:
@@ -16,15 +30,15 @@ class JarpcClientRouter:
         is_absolute_prefix: bool = False,
     ):
         """
-       Initializes the JARPC client router.
+        Initializes the JARPC client router.
 
-       :param prefix: Optional prefix for the router.
-       :type prefix: str
-       :param client: Optional client instance (AsyncJarpcClient or JarpcClient).
-       :type client: Union[AsyncJarpcClient, JarpcClient]
-       :param is_absolute_prefix: Whether the prefix is absolute.
-       :type is_absolute_prefix: bool
-       """
+        :param prefix: Optional prefix for the router.
+        :type prefix: str
+        :param client: Optional client instance (AsyncJarpcClient or JarpcClient).
+        :type client: Union[AsyncJarpcClient, JarpcClient]
+        :param is_absolute_prefix: Whether the prefix is absolute.
+        :type is_absolute_prefix: bool
+        """
         self._client: AsyncJarpcClient | JarpcClient | None = client
         self._prefix: str | None = prefix
         self._is_absolute_prefix: bool = is_absolute_prefix
@@ -55,7 +69,9 @@ class JarpcClientRouter:
         return isinstance(attr_value, JarpcClientRouter)
 
     @staticmethod
-    def _is_not_processed_endpoint(attr_name: str, attr_value: Any, is_nested: bool) -> bool:
+    def _is_not_processed_endpoint(
+        attr_name: str, attr_value: Any, is_nested: bool
+    ) -> bool:
         """
         Checks if the attribute is not a processed endpoint.
 
@@ -104,14 +120,16 @@ class JarpcClientRouter:
         :type attr_signature: Signature
         :return: Filtered parameters as a dictionary.
         """
-        return  {
+        return {
             k: v
             for k, v in attr_signature.parameters.items()
             if k not in ["self", "args", "kwargs"] and not k.startswith("_")
         }
 
     @staticmethod
-    def _determine_request_model(filtered_parameters: dict[str, inspect.Parameter], attr_signature: Signature) -> Type[BaseModel] | None:
+    def _determine_request_model(
+        filtered_parameters: dict[str, inspect.Parameter], attr_signature: Signature
+    ) -> Type[BaseModel] | None:
         """
         Determines the request model for the endpoint.
 
@@ -125,26 +143,31 @@ class JarpcClientRouter:
 
         if "_model" in attr_signature.parameters:
             request_model: Type[BaseModel] = attr_signature.parameters["_model"].default
-        elif (
-            len(filtered_parameters) == 1
-            and isinstance(
-                filtered_parameters[list(filtered_parameters.keys())[0]].annotation, type
-            )
-            and issubclass(
-                filtered_parameters[list(filtered_parameters.keys())[0]].annotation, BaseModel
-            )
-        ):
-            parameter = filtered_parameters[list(filtered_parameters.keys())[0]]
-            request_model = (
-                parameter.annotation if parameter.annotation is not _empty else None
-            )
+        # elif (
+        #     len(filtered_parameters) == 1
+        #     and isinstance(
+        #         filtered_parameters[list(filtered_parameters.keys())[0]].annotation, type
+        #     )
+        #     and issubclass(
+        #         filtered_parameters[list(filtered_parameters.keys())[0]].annotation, BaseModel
+        #     )
+        # ):
+        #     parameter = filtered_parameters[list(filtered_parameters.keys())[0]]
+        #     request_model = (
+        #         parameter.annotation if parameter.annotation is not _empty else None
+        #     )
         elif len(filtered_parameters) >= 1:
+
             request_model = create_model(
                 "DynamicModel",
                 **{
                     k: (
                         Any if v.annotation is _empty else v.annotation,
-                        ... if v.default is _empty else v.default,
+                        (
+                            None
+                            if v.default is ...
+                            else (v.default if v.default is not _empty else None)
+                        ),
                     )
                     for k, v in filtered_parameters.items()
                 },
@@ -152,7 +175,12 @@ class JarpcClientRouter:
 
         return request_model
 
-    def _wrap_endpoint(self, endpoint_name: str, request_model: Type[BaseModel], endpoint_signature: Signature) -> Any:
+    def _wrap_endpoint(
+        self,
+        endpoint_name: str,
+        request_model: Type[BaseModel],
+        endpoint_signature: Signature,
+    ) -> Any:
         """
         Wraps an endpoint method to handle parameter validation and sending requests via the client.
 
@@ -164,11 +192,14 @@ class JarpcClientRouter:
         :type endpoint_signature: Signature
         :return: Wrapped function to be used as endpoint.
         """
-        wrapped_attr = self._wrap(self, endpoint_name, request_model, endpoint_signature)
+        wrapped_attr = self._wrap(
+            self, endpoint_name, request_model, endpoint_signature
+        )
         wrapped_attr.__annotations__ = {
-            param_name: param.annotation for param_name, param in endpoint_signature.parameters.items()
+            param_name: param.annotation
+            for param_name, param in endpoint_signature.parameters.items()
         }
-        wrapped_attr.__annotations__['return'] = endpoint_signature.return_annotation
+        wrapped_attr.__annotations__["return"] = endpoint_signature.return_annotation
         return wrapped_attr
 
     def _proceed_endpoint(self, endpoint_name: str, endpoint_method: Any) -> None:
@@ -182,8 +213,12 @@ class JarpcClientRouter:
         """
         endpoint_signature = inspect.signature(endpoint_method)
         filtered_parameters = self._filter_parameters(endpoint_signature)
-        request_model = self._determine_request_model(filtered_parameters, endpoint_signature)
-        wrapped_endpoint = self._wrap_endpoint(endpoint_name, request_model, endpoint_signature)
+        request_model = self._determine_request_model(
+            filtered_parameters, endpoint_signature
+        )
+        wrapped_endpoint = self._wrap_endpoint(
+            endpoint_name, request_model, endpoint_signature
+        )
 
         self._method_map[endpoint_name] = wrapped_endpoint
         setattr(self, endpoint_name, wrapped_endpoint)
@@ -221,12 +256,9 @@ class JarpcClientRouter:
         :type client: AsyncJarpcClient | JarpcClient
         """
         self._client = client
-        for attr_name, attr_value in self.__class__.__dict__.items():
-            if attr_name.startswith("_") or isinstance(attr_value, property):
-                continue
-
-            if isinstance(attr_value, JarpcClientRouter):
-                attr_value.set_client(client)
+        for _, attr in self._filter_attributes():
+            if isinstance(attr, JarpcClientRouter):
+                attr.set_client(client)
 
     @staticmethod
     def _wrap(
@@ -274,6 +306,9 @@ class JarpcClientRouter:
 
                 # Validate and parse parameters using the model if it's a subclass of BaseModel
                 if issubclass(request_model, BaseModel):
+                    combined_params = {
+                        k: v for k, v in combined_params.items() if v is not ...
+                    }
                     params = request_model(**combined_params)
                 else:
                     # Filter out parameters with no default value or empty value
@@ -284,30 +319,66 @@ class JarpcClientRouter:
                 # If no model is defined, pass only the clear parameters
                 params = {}
 
+            return_annotation = method_signature.return_annotation
+            if return_annotation in {None, _empty}:
+                return_annotation = Any
+
             # Make a request using the client, if defined
             if instance._client is not None:
                 # Construct the full method name with prefix, if any
                 full_method_name = (
-                    f"{instance._prefix}.{method_name}" if instance._prefix else method_name
+                    f"{instance._prefix}.{method_name}"
+                    if instance._prefix
+                    else method_name
                 )
+
+                for service_key in {"ts", "ttl", "request_id", "rsvp", "durable"}:
+                    underscored_key = f"_{service_key}"
+                    if (
+                        underscored_key in method_signature.parameters
+                        and underscored_key not in service_kwargs
+                    ):
+                        param = method_signature.parameters[underscored_key]
+                        if (
+                            param.default is not param.empty
+                        ):  # Проверяем, есть ли дефолтное значение
+                            service_kwargs[service_key] = param.default
+
+                    # Переносим явно переданные значения без подчеркивания
+                    if underscored_key in service_kwargs:
+                        service_kwargs[service_key] = service_kwargs.pop(
+                            underscored_key
+                        )
 
                 # Send the request and process the response
                 response = await instance._client(
-                    method=full_method_name,
+                    method_name=full_method_name,
                     params=params,
+                    generic_request_type=request_model,
+                    generic_response_type=return_annotation,
                     **service_kwargs,
                 )
-                return process_return_value(method_signature.return_annotation, response)
+                return process_return_value(
+                    method_signature.return_annotation, response
+                )
             else:
                 # If no client is set, print the call for debugging
                 full_method_name = (
-                    f"{instance._prefix}.{method_name}" if instance._prefix else method_name
+                    f"{instance._prefix}.{method_name}"
+                    if instance._prefix
+                    else method_name
                 )
-                print("Client is None, call:", full_method_name, params)
+                print(
+                    "Client is None, call:",
+                    full_method_name,
+                    params.model_dump(exclude_unset=True),
+                )
 
         # Provide string representation of the wrapped method name
         def __str__(*args, **kwargs) -> str:
-            return f"{instance._prefix}.{method_name}" if instance._prefix else method_name
+            return (
+                f"{instance._prefix}.{method_name}" if instance._prefix else method_name
+            )
 
         # Attach string representation to the wrapped function
         wrapped.__str__ = __str__

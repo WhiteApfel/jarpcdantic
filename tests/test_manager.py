@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from jarpcdantic import AsyncJarpcManager, JarpcDispatcher, JarpcManager, JarpcRequest
+from jarpcdantic import JarpcDispatcher, JarpcManager, JarpcRequest
 from jarpcdantic.manager import check_function_call
 
 
@@ -236,26 +236,22 @@ class TestGetResponse:
         "rsvp": True,
     }
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_no_method(self, is_async):
+    async def test_no_method(self):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
 
-        if is_async:
-            response = await manager.get_response(json.dumps(self.basic_request))
-        else:
-            response = manager.get_response(json.dumps(self.basic_request))
+        response = await manager.get_response(json.dumps(self.basic_request))
         assert response is not None
         assert response.result is None
         assert response.error == {
             "code": -32601,
             "message": "Method not found",
-            "data": "KeyError: 'method'",
+            "error": {
+                "method": "method",
+                "declared_methods": [],
+            },
         }
 
-    @pytest.mark.parametrize("is_async", [False, True])
     @pytest.mark.parametrize(
         "params, explanation",
         [
@@ -264,51 +260,38 @@ class TestGetResponse:
             (dict(a=1, b=2), "Missing arguments: x"),
         ],
     )
-    async def test_invalid_params(self, is_async, params, explanation):
+    async def test_invalid_params(self, params, explanation):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
         dispatcher.add_rpc_method(lambda a, b, c=0, *, x, y=1: ..., "method")
 
         request = deepcopy(self.basic_request)
         request["params"] = params
-        if is_async:
-            response = await manager.get_response(json.dumps(request))
-        else:
-            response = manager.get_response(json.dumps(request))
+        response = await manager.get_response(json.dumps(request))
+        
         assert response is not None
         assert response.result is None
         assert response.error == {
             "code": -32602,
             "message": "Invalid params",
-            "data": explanation,
+            "error": explanation,
         }
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_handle_result_ok(self, is_async):
+    async def test_handle_result_ok(self):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
 
         @dispatcher.rpc_method
         def method(jarpc_request, param):
             return "42"
 
-        if is_async:
-            response = await manager.handle(json.dumps(self.basic_request))
-        else:
-            response = manager.handle(json.dumps(self.basic_request))
+        response = await manager.handle(json.dumps(self.basic_request))
 
         assert json.loads(response)["result"] == "42"
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_handle_result_none(self, is_async):
+    async def test_handle_result_none(self):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
 
         @dispatcher.rpc_method
         def method(jarpc_request, param):
@@ -317,24 +300,16 @@ class TestGetResponse:
         request_data = deepcopy(self.basic_request)
         request_data["ts"] = 1.0
 
-        if is_async:
-            response = await manager.handle(json.dumps(request_data))
-        else:
-            response = manager.handle(json.dumps(request_data))
+        response = await manager.handle(json.dumps(request_data))
 
         assert response is None
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_invalid_request_json_parse_error(self, is_async):
+    async def test_invalid_request_json_parse_error(self):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
         request = "some invalid json"
-        if is_async:
-            response = await manager.get_response(request)
-        else:
-            response = manager.get_response(request)
+        response = await manager.get_response(request)
+        
         error = response.error
         assert error["message"] == "Parse error"
 
@@ -355,32 +330,22 @@ class TestGetResponse:
     #     assert error["message"] == "Invalid Request"
     #     assert error["data"] == 'Missing required field "params"'
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_invalid_rpc_method(self, is_async):
+    async def test_invalid_rpc_method(self):
         """Test rpc_method TypeError"""
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
 
         @dispatcher.rpc_method
         def method(jarpc_request, param):
             return "2" + 2
 
-        if is_async:
-            response = await manager.get_response(json.dumps(self.basic_request))
-        else:
-            response = manager.get_response(json.dumps(self.basic_request))
+        response = await manager.get_response(json.dumps(self.basic_request))
         error = response.error
         assert error["message"] == "Server error"
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_invalid_rpc_method_rsvp_false(self, is_async):
-        """Test no error response with unset rsvp"""
+    async def test_invalid_rpc_method_rsvp_false(self):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
         request = deepcopy(self.basic_request)
         request["rsvp"] = False
 
@@ -388,19 +353,12 @@ class TestGetResponse:
         def method(jarpc_request, param):
             return "2" + 2
 
-        if is_async:
-            response = await manager.get_response(json.dumps(request))
-        else:
-            response = manager.get_response(json.dumps(request))
+        response = await manager.get_response(json.dumps(request))
         assert response is None
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_rpc_method_time_out(self, is_async, caplog):
-        """Test rpc_method time out"""
+    async def test_rpc_method_time_out(self, caplog):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
         request = deepcopy(self.basic_request)
         request["ts"] = datetime.now(tz=timezone.utc).timestamp()
         request["ttl"] = 1.0
@@ -411,38 +369,29 @@ class TestGetResponse:
 
             time.sleep(1)
 
-        if is_async:
-            response = await manager.get_response(json.dumps(request))
-        else:
-            response = manager.get_response(json.dumps(request))
+        response = await manager.get_response(json.dumps(request))
 
         caplog.set_level(logging.WARNING)
 
         assert response is None
         assert "Request took too long to complete" in caplog.text
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_sync(self, is_async):
+    async def test_sync(self):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
 
         @dispatcher.rpc_method
         def method(param):
             assert param == "value"
             return "return value"
 
-        if is_async:
-            response = await manager.get_response(json.dumps(self.basic_request))
-        else:
-            response = manager.get_response(json.dumps(self.basic_request))
+        response = await manager.get_response(json.dumps(self.basic_request))
         assert response is not None
         assert response.result == "return value"
 
     async def test_async(self):
         dispatcher = JarpcDispatcher()
-        manager = AsyncJarpcManager(dispatcher)
+        manager = JarpcManager(dispatcher)
 
         @dispatcher.rpc_method
         async def method(param):
@@ -455,7 +404,7 @@ class TestGetResponse:
 
     async def test_task_cancellation(self):
         dispatcher = JarpcDispatcher()
-        manager = AsyncJarpcManager(dispatcher)
+        manager = JarpcManager(dispatcher)
 
         @dispatcher.rpc_method
         async def method(param):
@@ -482,7 +431,6 @@ class TestCallMethod:
         "rsvp": True,
     }
 
-    @pytest.mark.parametrize("is_async", [False, True])
     @pytest.mark.parametrize(
         "params",
         [
@@ -491,11 +439,9 @@ class TestCallMethod:
             dict(a=1, b=2, x=0, y=1, z=2, abc="def"),
         ],
     )
-    async def test_no_context(self, is_async, params):
+    async def test_no_context(self, params):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
         request_data = deepcopy(self.basic_request_kwargs)
         request_data["params"] = params
         request = JarpcRequest(**request_data)
@@ -504,15 +450,12 @@ class TestCallMethod:
         def method(a, b, c=0, *, x, y=1, **kw):
             return "return value"
 
-        if is_async:
-            result = await manager._call_method(method, request)
-        else:
-            result = manager._call_method(method, request)
+        result = await manager._call_method(method, request)
         assert result == "return value"
 
     async def test_async(self):
         dispatcher = JarpcDispatcher()
-        manager = AsyncJarpcManager(dispatcher)
+        manager = JarpcManager(dispatcher)
         request_data = deepcopy(self.basic_request_kwargs)
         request = JarpcRequest(**request_data)
 
@@ -523,15 +466,10 @@ class TestCallMethod:
         result = await manager._call_method(method, request)
         assert result == "return value"
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_context(self, is_async):
+    async def test_context(self):
         context = {"app": "some app"}
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher, context)
-            if is_async
-            else JarpcManager(dispatcher, context)
-        )
+        manager = JarpcManager(dispatcher, context)
         request = JarpcRequest(**self.basic_request_kwargs)
 
         @dispatcher.rpc_method
@@ -540,18 +478,12 @@ class TestCallMethod:
             assert param == "value"
             return "return value"
 
-        if is_async:
-            result = await manager._call_method(method, request)
-        else:
-            result = manager._call_method(method, request)
+        result = await manager._call_method(method, request)
         assert result == "return value"
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_request(self, is_async):
+    async def test_request(self):
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher) if is_async else JarpcManager(dispatcher)
-        )
+        manager = JarpcManager(dispatcher)
         request = JarpcRequest(**self.basic_request_kwargs)
 
         @dispatcher.rpc_method
@@ -560,21 +492,13 @@ class TestCallMethod:
             assert param == "value"
             return "return value"
 
-        if is_async:
-            result = await manager._call_method(method, request)
-        else:
-            result = manager._call_method(method, request)
+        result = await manager._call_method(method, request)
         assert result == "return value"
 
-    @pytest.mark.parametrize("is_async", [False, True])
-    async def test_context_conflict(self, is_async):
+    async def test_context_conflict(self):
         context = {"app": "some app"}
         dispatcher = JarpcDispatcher()
-        manager = (
-            AsyncJarpcManager(dispatcher, context)
-            if is_async
-            else JarpcManager(dispatcher, context)
-        )
+        manager = JarpcManager(dispatcher, context)
         request_data = deepcopy(self.basic_request_kwargs)
         request_data["params"] = {"app": "my app", "param": "value"}
         request = JarpcRequest(**request_data)
@@ -584,7 +508,4 @@ class TestCallMethod:
             assert False
 
         with pytest.raises(TypeError):
-            if is_async:
-                await manager._call_method(method, request)
-            else:
-                manager._call_method(method, request)
+            await manager._call_method(method, request)

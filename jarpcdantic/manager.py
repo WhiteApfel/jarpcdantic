@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 import inspect
 import logging
-from asyncio import CancelledError
+from asyncio import CancelledError, TaskGroup
 from collections import deque
-from typing import Iterable, Optional, get_origin, Union, get_args
+from typing import Any, Iterable, Optional
 
-from pydantic import BaseModel
 from pydantic_core import ValidationError
 
+from .context import meta_context_var
 from .dispatcher import JarpcDispatcher
 from .errors import JarpcError, JarpcInvalidParams, JarpcParseError, JarpcServerError
-from .format import JarpcRequest, JarpcResponse, json_dumps, json_loads
+from .format import JarpcRequest, JarpcResponse
 from .utils import convert_params_to_models, process_return_value
 
 logger = logging.getLogger(__name__)
@@ -109,159 +109,106 @@ class JarpcManager:
     def __init__(
         self,
         dispatcher: JarpcDispatcher,
-        context: dict = None,
-        loads=json_loads,
-        dumps=json_dumps,
+        context: dict[str, Any] = None,
     ):
-        self.dispatcher = dispatcher
-        self.context = (
+        self.dispatcher: JarpcDispatcher = dispatcher
+        self.context: dict[str, Any] = (
             context or dict()
         )  # per-manager context cannot contain jarpc_request
-        self.loads = loads
-        self.dumps = dumps
+        self.task_group: TaskGroup = TaskGroup()
 
-    def handle(self, request: str) -> Optional[str]:
-        """Handle request string, producing either response string or None if no response is required."""
-        jarpc_response = self.get_response(request_string=request)
-        if jarpc_response is not None:
-            return jarpc_response.model_dump_json()
+    async def handle(self, request: str) -> str | None:
+        response: JarpcResponse = await self.get_response(request)
+        return response.model_dump_json() if response else None
 
-    def get_response(self, request_string: str) -> Optional[JarpcResponse]:
-        """Returns either JarpcResponse or None if no response is required."""
-        request_id = None
+    async def get_response(self, request_string: str) -> JarpcResponse | None:
+        request_id: str | None = None
+        context_token = None
         rsvp = True
+
         try:
-            try:
-                request = JarpcRequest.model_validate_json(request_string)
-            except ValidationError:
-                raise JarpcParseError()
+            request = self._parse_request_or_raise(request_string)
+
             if request.expired:
                 logger.warning(f"Request arrived too late: {request}")
                 return None
 
             request_id = request.id
             rsvp = request.rsvp
-
+            context_token = meta_context_var.set(request.meta)
             method = self.dispatcher[request.method]
-            try:
-                result = self._call_method(method, request)
-            except TypeError:
-                is_call_ok, explanation = check_function_call(
-                    method, request.params, self.context
-                )
-                if is_call_ok:
-                    raise
-                logger.debug(
-                    f"wrong signature in call to {request.method}: {explanation}"
-                )
-                raise JarpcInvalidParams(explanation)
+
+            if not request.rsvp:
+                self.task_group.create_task(self._run_method(method, request))
+                return None
+
+            result = await self._execute_request_method(method, request)
 
             if request.expired:
                 logger.warning(f"Request took too long to complete: {request}")
                 return None
-            return JarpcResponse(request_id=request_id, result=result) if rsvp else None
-        except JarpcError as e:
-            logger.debug(e, exc_info=True)
-            return (
-                JarpcResponse(request_id=request_id, error=e.as_dict())
-                if rsvp
-                else None
-            )
-        except Exception as e:
-            logger.exception(e)
-            return (
-                JarpcResponse(
-                    request_id=request_id, error=JarpcServerError(e).as_dict()
-                )
-                if rsvp
-                else None
-            )
 
-    def _call_method(self, method, request):
-        """
-        Универсальный вызов метода с обработкой результата (синхронная версия).
-        """
-        context_params, method_sig = prepare_context_params(
-            method, request, self.context
-        )
-        converted_params = convert_params_to_models(request.params, method_sig)
-        final_params = {**converted_params, **context_params}
-        result = method(**final_params)
-        return_annotation = method_sig.return_annotation
-        return process_return_value(return_annotation, result)
+            return JarpcResponse(request_id=request_id, result=result)
 
-
-class AsyncJarpcManager(JarpcManager):
-    async def handle(self, request: str) -> Optional[str]:
-        """Handle request string, producing either response string or None if no response is required."""
-        jarpc_response = await self.get_response(request_string=request)
-        if jarpc_response is not None:
-            return jarpc_response.model_dump_json()
-
-    async def get_response(self, request_string: str) -> Optional[JarpcResponse]:
-        """Returns either JarpcResponse or None if no response is required."""
-        request_id = None
-        rsvp = True
-        try:
-            try:
-                request = JarpcRequest.model_validate_json(request_string)
-            except ValidationError:
-                raise JarpcParseError()
-            if request.expired:
-                logger.warning(f"Request arrived too late: {request}")
-                return None
-
-            request_id = request.id
-            rsvp = request.rsvp
-
-            method = self.dispatcher[request.method]
-            try:
-                result = await self._call_method(method, request)
-            except TypeError:
-                is_call_ok, explanation = check_function_call(
-                    method, request.params, self.context
-                )
-                if is_call_ok:
-                    raise
-                logger.debug(
-                    f"wrong signature in call to {request.method}: {explanation}"
-                )
-                raise JarpcInvalidParams(explanation)
-
-            if request.expired:
-                logger.warning(f"Request took too long to complete: {request}")
-                return None
-            return JarpcResponse(request_id=request_id, result=result) if rsvp else None
         except CancelledError:
             raise
+
         except JarpcError as e:
             logger.debug(e, exc_info=True)
-            return (
-                JarpcResponse(request_id=request_id, error=e.as_dict())
-                if rsvp
-                else None
-            )
+            return JarpcResponse(request_id=request_id, error=e.as_dict()) if rsvp else None
+
         except Exception as e:
             logger.exception(e)
-            return (
-                JarpcResponse(
-                    request_id=request_id, error=JarpcServerError(e).as_dict()
-                )
-                if rsvp
-                else None
-            )
+            return JarpcResponse(
+                request_id=request_id,
+                error=JarpcServerError(e).as_dict()
+            ) if rsvp else None
 
-    async def _call_method(self, method, request):
-        """
-        Универсальный вызов метода с обработкой результата (асинхронная версия).
-        """
-        context_params, method_sig = prepare_context_params(
-            method, request, self.context
-        )
+        finally:
+            if context_token:
+                meta_context_var.reset(context_token)
+
+    def _parse_request_or_raise(self, request_string: str) -> JarpcRequest:
+        try:
+            return JarpcRequest.model_validate_json(request_string)
+        except ValidationError:
+            raise JarpcParseError()
+
+    async def _execute_request_method(self, method, request: JarpcRequest) -> Any:
+        try:
+            return await self._call_method(method, request)
+        except TypeError:
+            is_call_ok, explanation = check_function_call(
+                method, request.params, self.context
+            )
+            if is_call_ok:
+                raise
+            logger.debug(f"Wrong signature in call to {request.method}: {explanation}")
+            raise JarpcInvalidParams(explanation)
+
+    async def _call_method(self, method, request: JarpcRequest) -> Any:
+        context_params, method_sig = prepare_context_params(method, request, self.context)
         converted_params = convert_params_to_models(request.params, method_sig)
+
+        if any(key in converted_params for key in context_params):
+            raise TypeError("Cannot mix context and non-context parameters")
+
         final_params = {**converted_params, **context_params}
         result = method(**final_params)
+
         if inspect.isawaitable(result):
             result = await result
-        return_annotation = method_sig.return_annotation
-        return process_return_value(return_annotation, result)
+
+        return process_return_value(method_sig.return_annotation, result)
+
+    async def _run_method(self, method, request: JarpcRequest):
+        try:
+            await self._call_method(method, request)
+        except Exception as e:
+            logger.exception(f"RSVP=False method {request.method} failed: {e}")
+
+    async def shutdown(self):
+        logger.info("Shutting down: waiting for all RSVP=False tasks to complete...")
+        await self.task_group.__aexit__(None, None, None)
+        logger.info("All tasks completed. Shutdown complete.")
+

@@ -2,7 +2,7 @@ import inspect
 import traceback
 from collections.abc import Iterable, Mapping
 from types import UnionType
-from typing import get_origin, get_args, Union, Type, Any
+from typing import Any, Type, Union, get_args, get_origin
 
 from pydantic import BaseModel, ValidationError
 
@@ -33,6 +33,10 @@ def convert_to_pydantic_model(source: dict | BaseModel, target_model: Type[BaseM
 def convert_single_value(value: Any, target_type: Type) -> Any:
     if inspect.isclass(target_type) and issubclass(target_type, BaseModel):
         return convert_to_pydantic_model(value, target_type)
+    if (target_type is None or target_type is type(None)) and value is None:
+        return None
+    if isinstance(value, target_type):
+        return value
     try:
         return target_type(value)
     except (ValueError, TypeError):
@@ -55,22 +59,37 @@ def convert_mapping(value: Any, target_type: Type) -> Any:
 
 
 def convert_union(value: Any, target_type: Type) -> Any:
-    for arg in get_args(target_type):
+    args = get_args(target_type)
+    if not args:
+        raise TypeError(f"{target_type} is not a valid Union type")
+
+    if value is None:
+        if type(None) in args:
+            return None
+        raise JarpcParseError(f"Cannot convert None to {target_type}")
+
+    for arg in args:
+        if isinstance(value, arg):
+            return value
+
+    prioritized_args = sorted(args, key=lambda x: (x is bool, x is str))
+
+    for arg in prioritized_args:
         if arg is type(None):
-            if value is None:
-                return None
-        else:
-            try:
-                return convert_value_to_type(value, arg)
-            except (ValidationError, JarpcParseError, TypeError, AttributeError):
-                continue
+            continue
+
+        try:
+            return convert_value_to_type(value, arg)
+        except (ValidationError, JarpcParseError, TypeError, ValueError):
+            continue
+
     raise JarpcParseError(f"Cannot convert value {value} to any of {target_type}")
 
 
 def convert_value_to_type(value: Any, target_type: Type) -> Any:
     """
-    Универсальная функция для преобразования значения в указанный тип.
-    Поддерживает Pydantic модели, контейнеры с моделями и Union.
+    Universal function to convert value to specified type.
+    Supports Pydantic models, containers with models and Union.
     """
     origin = get_origin(target_type)
 
@@ -92,9 +111,10 @@ def convert_params_to_models(params, method_sig):
     """
     converted_params = {}
     for param_name, param_value in params.items():
-        param_type = method_sig.parameters.get(
+        param_sig = method_sig.parameters.get(
             param_name, inspect.Parameter.empty
-        ).annotation
+        )
+        param_type = param_sig.annotation if param_sig is not inspect.Parameter.empty else param_sig
         if param_type is not inspect.Parameter.empty:
             try:
                 converted_params[param_name] = convert_value_to_type(

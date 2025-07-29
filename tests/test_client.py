@@ -25,11 +25,12 @@ class TestJarpcClient:
         with mock.patch("uuid.uuid4") as uuid_mock:
             uuid_mock.return_value = "example-uuid"
             request = jarpc_client._prepare_request(
-                method="test_method", params={"a": 1}
+                method_name="test_method", params={"a": 1}
             )
 
         assert request.model_dump() == {
             "method": "test_method",
+            "meta": {},
             "params": {"a": 1},
             "id": "example-uuid",
             "version": "1.0",
@@ -83,11 +84,12 @@ class TestJarpcClient:
         with mock.patch("uuid.uuid4") as uuid_mock:
             uuid_mock.return_value = "example-uuid"
             request = jarpc_client._prepare_request(
-                method="test_method", params={"a": 1}, ttl=ttl, rsvp=rsvp
+                method_name="test_method", params={"a": 1}, ttl=ttl, rsvp=rsvp
             )
 
         assert request.model_dump() == {
             "method": "test_method",
+            "meta": {},
             "params": {"a": 1},
             "id": "example-uuid",
             "version": "1.0",
@@ -110,11 +112,12 @@ class TestJarpcClient:
         with mock.patch("uuid.uuid4") as uuid_mock:
             uuid_mock.return_value = "example-uuid"
             request = jarpc_client._prepare_request(
-                method="test_method", params={"a": 1}, ttl=4.0, durable=True
+                method_name="test_method", params={"a": 1}, ttl=4.0, durable=True
             )
 
         assert request.model_dump() == {
             "method": "test_method",
+            "meta": {},
             "params": {"a": 1},
             "id": "example-uuid",
             "version": "1.0",
@@ -143,6 +146,7 @@ class TestJarpcClient:
             == result["result"]
         )
 
+
     @pytest.mark.parametrize("is_async", [False, True])
     def test_parse_response_error(self, is_async):
         client = AsyncJarpcClient if is_async else JarpcClient
@@ -156,7 +160,7 @@ class TestJarpcClient:
             jarpc_client._parse_response(response_string=json.dumps(error), rsvp=True)
         assert e.value.code == error["error"]["code"]
         assert e.value.message == error["error"]["message"]
-        assert e.value.data == error["error"]["data"]
+        assert e.value.error == error["error"]["data"]
 
     @pytest.mark.parametrize("is_async", [False, True])
     def test_parse_response_invalid_json(self, is_async):
@@ -180,7 +184,7 @@ class TestJarpcClient:
         jarpc_client = JarpcClient(transport=transport)
 
         call_kwargs = dict(
-            method="method", params={"param1": 1}, id=request_id, extra_kwarg=1
+            method_name="method", params={"param1": 1}, id=request_id, extra_kwarg=1
         )
         call_result = jarpc_client(**call_kwargs)
         assert call_result == response["result"]

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+
 from setuptools import setup
 
 
@@ -25,8 +26,8 @@ setup(
     long_description_content_type="text/markdown",
     maintainer="WhiteApfel",
     maintainer_email="white@pfel.ru",
-    url='https://github.com/whiteapfel/jarpcdantic/',
-    download_url='https://pypi.org/project/jarpcdantic/',
+    url="https://github.com/whiteapfel/jarpcdantic/",
+    download_url="https://pypi.org/project/jarpcdantic/",
     license="Mozilla Public License 2.0",
     classifiers=[
         "Development Status :: 3 - Alpha",

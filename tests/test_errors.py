@@ -8,7 +8,7 @@ from jarpcdantic import (
     JarpcUnauthorized,
     JarpcUnknownError,
     JarpcValidationError,
-    raise_exception,
+    jarpcdantic_exceptions,
 )
 
 
@@ -24,9 +24,9 @@ from jarpcdantic import (
 )
 def test_raise_exception(code, error_class, data):
     with pytest.raises(error_class) as e:
-        raise_exception(code=code, data=data)
+        jarpcdantic_exceptions.raise_exception(code=code, data=data)
 
-    assert e.value.data == data
+    assert e.value.error == data
     assert e.value.code == code
     assert e.value.message == error_class.message
 
@@ -42,20 +42,21 @@ def test_raise_exception(code, error_class, data):
 )
 def test_raise_exception_unknown_error(code, error_class, data, message):
     with pytest.raises(error_class) as e:
-        raise_exception(code=code, data=data, message=message)
+        jarpcdantic_exceptions.raise_exception(code=code, data=data, message=message)
 
-    assert e.value.data == data
+    assert e.value.error == data
     assert e.value.code == code
     assert e.value.message == message
 
 
 def test_as_dict_method():
-    exception = JarpcError("test_as_dict_method")
-    exception.code = 4444
-    exception.message = "test exception"
+    with pytest.raises(JarpcError) as e:
+        jarpcdantic_exceptions.raise_exception(
+            code=4444, data="test_as_dict_method", message="test exception"
+        )
 
-    assert exception.as_dict() == {
+    assert e.value.as_dict() == {
         "code": 4444,
-        "data": "test_as_dict_method",
+        "error": "test_as_dict_method",
         "message": "test exception",
     }

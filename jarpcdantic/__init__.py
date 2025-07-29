@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from .client import AsyncJarpcClient, JarpcClient
+from .context import meta_context_var
 from .dispatcher import JarpcDispatcher
 from .errors import (
     JarpcError,
@@ -15,10 +16,10 @@ from .errors import (
     JarpcUnauthorized,
     JarpcUnknownError,
     JarpcValidationError,
-    raise_exception,
+    jarpcdantic_exceptions,
 )
 from .format import JarpcRequest, JarpcResponse
-from .manager import AsyncJarpcManager, JarpcManager
+from .manager import JarpcManager
 from .router import JarpcClientRouter
 
 __all__ = (
@@ -42,13 +43,14 @@ __all__ = (
     "JarpcUnknownError",
     "JarpcUnauthorized",
     "JarpcValidationError",
-    "raise_exception",
+    "jarpcdantic_exceptions",
     # format
     "JarpcRequest",
     "JarpcResponse",
     # manager
-    "AsyncJarpcManager",
     "JarpcManager",
+    # context
+    "meta_context_var",
 )
 
-__version__ = "0.1.6"
+__version__ = "0.2.0"

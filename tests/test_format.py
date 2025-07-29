@@ -14,6 +14,7 @@ from jarpcdantic import (
 )
 
 VALID_REQUEST_KWARGS = {
+    "meta": None,
     "method": "get_result",
     "params": {"a": 1, "b": 2},
     "ts": 0.0,
@@ -61,6 +62,7 @@ class TestJarpcRequest:
 
 
 VALID_RESULT = {
+    "meta": None,
     "error": None,
     "result": "some result",
     "request_id": "123-456-788",
@@ -68,6 +70,7 @@ VALID_RESULT = {
 }
 
 VALID_ERROR = {
+    "meta": None,
     "result": None,
     "error": {"code": 2000, "message": "Validation error", "data": "some data"},
     "request_id": "123-456-788",

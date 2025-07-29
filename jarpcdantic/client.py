@@ -1,25 +1,18 @@
 # -*- coding: utf-8 -*-
 import time
 import uuid
-from typing import Any, Awaitable, Callable, Optional, Type, Union
+from typing import Any, Awaitable, Callable, Type
 
 from pydantic import ValidationError
 
+from .context import meta_context_var
 from .errors import (
     JarpcError,
     JarpcInvalidRequest,
-    JarpcParseError,
     JarpcServerError,
-    raise_exception,
+    jarpcdantic_exceptions,
 )
-from .format import (
-    JarpcRequest,
-    JarpcResponse,
-    RequestT,
-    ResponseT,
-    json_dumps,
-    json_loads,
-)
+from .format import JarpcRequest, JarpcResponse, RequestT, ResponseT
 
 
 class JarpcClient:
@@ -72,9 +65,9 @@ class JarpcClient:
         transport: Callable[
             [str, JarpcRequest, Any | None], Awaitable[str | None] | str | None
         ],
-        default_ttl: Optional[float] = None,
-        default_rpc_ttl: Optional[float] = None,
-        default_notification_ttl: Optional[float] = None,
+        default_ttl: float | None = None,
+        default_rpc_ttl: float | None = None,
+        default_notification_ttl: float | None = None,
     ):
         """
         :param transport: callable to send request
@@ -86,28 +79,32 @@ class JarpcClient:
         self._default_rpc_ttl = default_rpc_ttl or default_ttl
         self._default_notification_ttl = default_notification_ttl or default_ttl
 
-    def __getattr__(self, method):
+    def __getattr__(self, method_name: str) -> Callable[..., Any]:
+        """Allows calling `client.some_method(**params)` instead of `client("some_method", ...)`."""
+
         def wrapped(**params):
-            return self.simple_call(method=method, params=params)
+            return self.simple_call(method_name=method_name, params=params)
 
         return wrapped
 
-    def simple_call(self, method: str, **params):
-        return self(method=method, params=params)
+    def simple_call(self, method_name: str, **params) -> Any:
+        """Alias for `self.__call__`."""
+        return self(method_name=method_name, params=params)
 
     def __call__(
         self,
-        method: str,
+        method_name: str,
         params: RequestT,
-        ts: Optional[float] = None,
-        ttl: Optional[float] = None,
-        request_id: Optional[str] = None,
+        ts: float | None = None,
+        ttl: float | None = None,
+        request_id: str | None = None,
         rsvp: bool = True,
         durable: bool = False,
         **transport_kwargs
     ) -> JarpcResponse:
+        """Makes a synchronous JARPC request."""
         request = self._prepare_request(
-            method, params, ts, ttl, request_id, rsvp, durable
+            method_name, params, ts, ttl, request_id, rsvp, durable
         )
         request_string = request.model_dump_json()
 
@@ -115,40 +112,52 @@ class JarpcClient:
             response_string = self._transport(
                 request_string, request, **transport_kwargs
             )
+
+        # Allow only JarpcError and its subclasses to be raised
         except JarpcError:
             raise
         except Exception as e:
+            # Unexpected exception
             raise JarpcServerError(e)
 
         return self._parse_response(response_string, rsvp)
 
     def _prepare_request(
         self,
-        method: str,
+        method_name: str,
         params: RequestT,
-        ts: Optional[float] = None,
-        ttl: Optional[float] = None,
-        request_id: Optional[str] = None,
+        ts: float | None = None,
+        ttl: float | None = None,
+        request_id: str | None = None,
         rsvp: bool = True,
         durable: bool = False,
+        meta: dict[str, Any] = None,
+        generic_request_type: Type[RequestT] = Any,
     ) -> JarpcRequest[RequestT]:
-        """Make request."""
+        """Creates a JARPC request object."""
         if durable:
             ttl = None
         else:
+            # If request is not durable, use default ttl
+            # If default ttl is not set, use default_rpc_ttl for rsvp=True
+            # and default_notification_ttl for rsvp=False
             default_ttl = (
                 self._default_rpc_ttl if rsvp else self._default_notification_ttl
             )
             ttl = default_ttl if ttl is None else ttl
 
+        context_meta = meta_context_var.get({})
+        combined_meta = context_meta | (meta or {})
+
         try:
-            request = JarpcRequest[RequestT](
-                method=method,
+            request = JarpcRequest[generic_request_type](
+                method=method_name,
                 params=params,
                 ts=time.time() if ts is None else ts,
                 ttl=ttl,
                 id=str(uuid.uuid4()) if request_id is None else request_id,
                 rsvp=rsvp,
+                meta=combined_meta,
             )
         except ValidationError as e:
             raise JarpcInvalidRequest(e) from e
@@ -160,7 +169,7 @@ class JarpcClient:
         response_string: str,
         rsvp: bool,
         generic_response_type: Type[ResponseT] = Any,
-    ) -> JarpcResponse[ResponseT] | None:
+    ) -> ResponseT | None:
         """Parse response and either return result or raise JARPC error."""
         if rsvp:
             try:
@@ -173,11 +182,12 @@ class JarpcClient:
                 return response.result
             else:
                 error = response.error
-                raise_exception(
+                jarpcdantic_exceptions.raise_exception(
                     code=error.get("code"),
                     data=error.get("data"),
                     message=error.get("message"),
                 )
+        return None
 
 
 class AsyncJarpcClient(JarpcClient):
@@ -232,21 +242,24 @@ class AsyncJarpcClient(JarpcClient):
 
     async def __call__(
         self,
-        method: str,
+        method_name: str,
         params: RequestT,
-        ts: Optional[float] = None,
-        ttl: Optional[float] = None,
-        request_id: Optional[str] = None,
+        ts: float | None = None,
+        ttl: float | None = None,
+        request_id: str | None = None,
         rsvp: bool = True,
         durable: bool = False,
+        meta: dict[str, Any] = None,
         generic_request_type: Type[RequestT] = Any,
         generic_response_type: Type[ResponseT] = Any,
         **transport_kwargs
-    ) -> str:
-        request: JarpcRequest[RequestT] = self._prepare_request(
-            method, params, ts, ttl, request_id, rsvp, durable
+    ) -> ResponseT:
+        combined_meta = (meta_context_var.get({}) or {}) | (meta or {})
+
+        request: JarpcRequest[generic_request_type] = self._prepare_request(
+            method_name, params, ts, ttl, request_id, rsvp, durable, combined_meta
         )
-        request_string = request.model_dump_json()
+        request_string = request.model_dump_json(exclude_unset=True)
 
         try:
             response_string = await self._transport(
@@ -257,5 +270,4 @@ class AsyncJarpcClient(JarpcClient):
         except Exception as e:
             raise JarpcServerError(e)
 
-        response = self._parse_response(response_string, rsvp, generic_response_type)
-        return self._parse_response(response_string, rsvp)
+        return self._parse_response(response_string, rsvp, generic_response_type)
