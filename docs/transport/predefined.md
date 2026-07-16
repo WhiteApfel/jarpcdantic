@@ -1,13 +1,13 @@
 # Pre-defined Transports
 
-If you don't want to write your own transport layer from scratch, you can use the community package `jarpc-clients` which provides ready-to-use transports for HTTP (via `aiohttp` and `requests`) and AMQP (via `cabbage` / `cabbagok`).
+If you don't want to write your own transport layer from scratch, you can use the community package `jarpcdantic-clients` which provides ready-to-use transports for HTTP (via `aiohttp` and `requests`) and AMQP (via `cabbagok`).
 
 ## Installation
 
 Install the package directly from the repository (or PyPI if available):
 
 ```bash
-pip install jarpc-clients
+pip install jarpcdantic-clients
 ```
 
 Make sure you also install the underlying library required for your chosen transport (e.g., `pip install aiohttp` or `pip install cabbagok`).
@@ -19,7 +19,7 @@ The `AiohttpTransport` sends JSON-RPC requests via HTTP POST. It perfectly match
 ```python
 import asyncio
 from jarpcdantic import JarpcClient
-from jarpc_clients.aiohttp_client import AiohttpTransport
+from jarpcdantic_clients.aiohttp_client import AiohttpTransport
 
 async def main():
     # 1. Initialize the transport with the server URL
@@ -48,7 +48,7 @@ The `CabbagokTransport` sends JSON-RPC requests over RabbitMQ using the `cabbago
 ```python
 import asyncio
 from jarpcdantic import JarpcClient
-from jarpc_clients.cabbagok_client import CabbagokTransport
+from jarpcdantic_clients.cabbagok_client import CabbagokTransport
 from cabbagok import AsyncAmqpRpc
 
 async def main():
@@ -80,7 +80,7 @@ When building the receiving side (the server) over `cabbagok`, you can avoid boi
 import asyncio
 from cabbagok import AsyncAmqpRpc
 from jarpcdantic import AsyncJarpcManager
-from jarpc_clients.cabbagok_server import CabbagokServer
+from jarpcdantic_clients import CabbagokServer
 
 # 1. Define your dispatcher and manager
 from my_module import dispatcher
@@ -89,7 +89,7 @@ manager = AsyncJarpcManager(dispatcher)
 async def main():
     # 2. Setup the AMQP RPC connection
     amqp_rpc = AsyncAmqpRpc(amqp_url="amqp://guest:guest@localhost/")
-    await amqp_rpc.run()
+    await amqp_rpc.connect()
 
     # 3. Setup and start the Server
     server = CabbagokServer(
@@ -113,6 +113,6 @@ asyncio.run(main())
 
 ## RequestsTransport (Synchronous HTTP)
 
-`jarpc-clients` also includes a `RequestsTransport` based on the synchronous `requests` library. However, since `jarpcdantic` expects an `awaitable` transport for non-blocking I/O, you should prefer `AiohttpTransport` in async codebases. 
+`jarpcdantic-clients` also includes a `RequestsTransport` based on the synchronous `requests` library. However, since `jarpcdantic` expects an `awaitable` transport for non-blocking I/O, you should prefer `AiohttpTransport` in async codebases. 
 
 If you absolutely must use the synchronous `RequestsTransport` in `jarpcdantic`, you will need to wrap its execution in `asyncio.to_thread` manually.
