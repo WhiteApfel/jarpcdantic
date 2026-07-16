@@ -26,18 +26,28 @@ theme:
     - announce.dismiss
     - navigation.tabs
 nav:
-- Overview: index.md
+- Getting Started:
+  - Overview: index.md
+  - Step-by-Step Tutorial: guide/tutorial.md
 - Core Components:
   - Core Overview: core/index.md
   - Manager: core/manager.md
   - Dispatcher: core/dispatcher.md
   - Router: core/router.md
   - Client: core/client.md
+- Advanced Features:
+  - Middlewares: advanced/middleware.md
+  - Concurrency Limits: advanced/limiters.md
+  - Exception Management: advanced/exceptions.md
+  - Meta & Context: advanced/meta-context.md
+  - Type Conversion: advanced/type-conversion.md
 - Transport:
   - Overview: transport/index.md
   - Pre-defined : transport/predefined.md
-  - Cabbagok: transport/cabbagok.md
   - Custom: transport/custom.md
+- API Reference:
+  - Modules: API/modules.md
+  - Types: API/types.md
 
 
 plugins:
