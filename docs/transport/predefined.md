@@ -72,6 +72,45 @@ async def main():
 asyncio.run(main())
 ```
 
+## CabbagokServer (AMQP / RabbitMQ Server)
+
+When building the receiving side (the server) over `cabbagok`, you can avoid boilerplate queue binding by using `CabbagokServer`. It automatically subscribes the queue and binds all methods registered in your `jarpcdantic` dispatcher to the RabbitMQ exchange.
+
+```python
+import asyncio
+from cabbagok import AsyncAmqpRpc
+from jarpcdantic import AsyncJarpcManager
+from jarpc_clients.cabbagok_server import CabbagokServer
+
+# 1. Define your dispatcher and manager
+from my_module import dispatcher
+manager = AsyncJarpcManager(dispatcher)
+
+async def main():
+    # 2. Setup the AMQP RPC connection
+    amqp_rpc = AsyncAmqpRpc(amqp_url="amqp://guest:guest@localhost/")
+    await amqp_rpc.run()
+
+    # 3. Setup and start the Server
+    server = CabbagokServer(
+        amqp_rpc=amqp_rpc,
+        manager=manager,
+        queue="my_microservices_queue",
+        exchange="my_microservices_exchange"
+    )
+    
+    # This will bind all method names in the dispatcher as routing keys
+    await server.start()
+    
+    print("Server is running...")
+    
+    # Keep running
+    while True:
+        await asyncio.sleep(3600)
+
+asyncio.run(main())
+```
+
 ## RequestsTransport (Synchronous HTTP)
 
 `jarpc-clients` also includes a `RequestsTransport` based on the synchronous `requests` library. However, since `jarpcdantic` expects an `awaitable` transport for non-blocking I/O, you should prefer `AiohttpTransport` in async codebases. 
