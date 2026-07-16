@@ -4,7 +4,7 @@ from typing import Any, Callable, Generator, Type
 
 from pydantic import BaseModel, Field, create_model
 
-from jarpcdantic import AsyncJarpcClient, JarpcClient
+from jarpcdantic import JarpcClient
 from jarpcdantic.utils import process_return_value
 
 
@@ -26,7 +26,7 @@ class JarpcClientRouter:
     def __init__(
         self,
         prefix: str | None = None,
-        client: AsyncJarpcClient | JarpcClient | None = None,
+        client: JarpcClient | None = None,
         is_absolute_prefix: bool = False,
     ):
         """
@@ -34,12 +34,12 @@ class JarpcClientRouter:
 
         :param prefix: Optional prefix for the router.
         :type prefix: str
-        :param client: Optional client instance (AsyncJarpcClient or JarpcClient).
-        :type client: Union[AsyncJarpcClient, JarpcClient]
+        :param client: Optional client instance (JarpcClient).
+        :type client: JarpcClient
         :param is_absolute_prefix: Whether the prefix is absolute.
         :type is_absolute_prefix: bool
         """
-        self._client: AsyncJarpcClient | JarpcClient | None = client
+        self._client: JarpcClient | None = client
         self._prefix: str | None = prefix
         self._is_absolute_prefix: bool = is_absolute_prefix
         self._method_map: dict[str, Callable[..., Any]] = {}
@@ -248,12 +248,12 @@ class JarpcClientRouter:
 
         nested_router._decorate_endpoints(is_nested=True)
 
-    def set_client(self, client: AsyncJarpcClient | JarpcClient) -> None:
+    def set_client(self, client: JarpcClient) -> None:
         """
         Sets the client for this router and all nested routers.
 
         :param client: JARPC Client instance
-        :type client: AsyncJarpcClient | JarpcClient
+        :type client: JarpcClient
         """
         self._client = client
         for _, attr in self._filter_attributes():
@@ -332,7 +332,7 @@ class JarpcClientRouter:
                     else method_name
                 )
 
-                for service_key in {"ts", "ttl", "request_id", "rsvp", "durable"}:
+                for service_key in {"ts", "ttl", "request_id", "rsvp", "durable", "meta"}:
                     underscored_key = f"_{service_key}"
                     if (
                         underscored_key in method_signature.parameters

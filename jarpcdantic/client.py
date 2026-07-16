@@ -1,12 +1,18 @@
 # -*- coding: utf-8 -*-
 import time
 import uuid
-from typing import Any, Awaitable, Callable, Type
+from typing import Any, Awaitable, Callable, Type, Iterable, Optional
+
+ClientMiddlewareFunc = Callable[
+    ["JarpcRequest", Callable[["JarpcRequest"], Awaitable[Any]]],
+    Awaitable[Any]
+]
 
 from pydantic import ValidationError
 
 from .context import meta_context_var
 from .errors import (
+    ExceptionManager,
     JarpcError,
     JarpcInvalidRequest,
     JarpcServerError,
@@ -17,110 +23,136 @@ from .format import JarpcRequest, JarpcResponse, RequestT, ResponseT
 
 class JarpcClient:
     """
-    JARPC Client implementation.
+    Asynchronous JARPC Client implementation.
 
-    To make RPC it requires transport.
+    To make RPC it requires async transport.
     Transport gets JARPC request as string, JarpcRequest-object and kwargs given with client call.
     If rsvp is True, transport must return JARPC response string, otherwise transport may not return any result.
     Transport's exceptions will be overwritten with `JarpcServerError` unless they are `JarpcError` subclasses.
 
-    Example of usage with python "requests" library:
+    Example of usage with python "aiohttp" library:
     ```
-    def requests_transport(request_string, request, timeout=60.0):
+    async def aiohttp_transport(request_string, request, timeout=60.0):
         try:
-            return requests.post(url='https://kitchen.org/jsonrpc', data=request_string, timeout=timeout)
-        except Timeout:
+            async with aiohttp.ClientSession() as session:
+                response = await session.post(url='https://kitchen.org/jsonrpc', data=request_string, timeout=timeout)
+                return await response.text()
+        except TimeoutError:
             raise JarpcTimeout
 
-    kitchen = JarpcClient(transport=requests_transport)
-    salad = kitchen(method='cook_salad', params=dict(name='Caesar'), request_id='1', timeout=15)
+    kitchen = JarpcClient(transport=aiohttp_transport)
+    salad = await kitchen(method='cook_salad', params=dict(name='Caesar'), request_id='1', timeout=15)
     ```
 
     You can also define transport as class:
     ```
-    class RequestsTransport:
-        def __init__(self, url, headers=None):
+    class AiohttpTransport:
+        def __init__(self, session, url, headers=None):
+            self.session = session
             self.url = url
             self.headers = headers or {}
-        def __call__(self, request_string, request, timeout=60.0):
+        async def __call__(self, request_string, request, timeout=60.0):
             try:
-                return requests.post(url=self.url, headers=self.headers, data=request_string, timeout=timeout)
-            except Timeout:
+                response = await session.post(url=self.url, headers=self.headers, data=request_string, timeout=timeout)
+                return await response.text()
+            except TimeoutError:
                 raise JarpcTimeout
 
-    transport = RequestsTransport(url='https://kitchen.org/jsonrpc', headers={'Content-Type': 'application/json'})
-    kitchen = JarpcClient(transport)
-    salad = kitchen(method='cook_salad', params=dict(name='Caesar'), request_id='1', timeout=15)
+    async with aiohttp.ClientSession() as session:
+        transport = AiohttpTransport(session=session, url='https://kitchen.org/jsonrpc',
+                                     headers={'Content-Type': 'application/json'})
+        kitchen = JarpcClient(transport=transport)
+        salad = await kitchen(method='cook_salad', params=dict(name='Caesar'), request_id='1', timeout=15)
     ```
 
     If you don't need to pass JARPC meta params and transport kwargs, you can use method-like calling syntax:
     ```
-    salad = kitchen.cook_salad(name='Caesar')
+    salad = await kitchen.cook_salad(name='Caesar')
     ```
     """
 
     def __init__(
         self,
-        # transport: Callable[[str, JarpcRequest, **kwargs], Union[str, None]]
-        transport: Callable[
-            [str, JarpcRequest, Any | None], Awaitable[str | None] | str | None
-        ],
+        transport: Callable[[str, "JarpcRequest", Any | None], Awaitable[str | None]],
         default_ttl: float | None = None,
         default_rpc_ttl: float | None = None,
         default_notification_ttl: float | None = None,
+        exception_manager: ExceptionManager | None = None,
+        middlewares: Iterable[ClientMiddlewareFunc] = None,
     ):
-        """
-        :param transport: callable to send request
-        :param default_ttl: float time interval while calling still actual
-        :param default_rpc_ttl: default_ttl for rsvp=True calls (if None default_ttl will be used)
-        :param default_notification_ttl: default_ttl for rsvp=False calls (if None default_ttl will be used)
-        """
         self._transport = transport
         self._default_rpc_ttl = default_rpc_ttl or default_ttl
         self._default_notification_ttl = default_notification_ttl or default_ttl
+        self.exception_manager = exception_manager or jarpcdantic_exceptions
+        self.middlewares: list[ClientMiddlewareFunc] = list(middlewares) if middlewares else []
+        self._middleware_stack = self._build_middleware_stack()
 
-    def __getattr__(self, method_name: str) -> Callable[..., Any]:
-        """Allows calling `client.some_method(**params)` instead of `client("some_method", ...)`."""
+    def middleware(self, func: ClientMiddlewareFunc) -> ClientMiddlewareFunc:
+        """Decorator to add a middleware function."""
+        self.middlewares.append(func)
+        self._middleware_stack = self._build_middleware_stack()
+        return func
 
-        def wrapped(**params):
-            return self.simple_call(method_name=method_name, params=params)
+    def _build_middleware_stack(self) -> Callable[["JarpcRequest", Callable], Awaitable[Any]]:
+        async def base_call(req: JarpcRequest, endpoint_handler: Callable) -> Any:
+            return await endpoint_handler(req)
+            
+        stack = base_call
+        for mw in reversed(self.middlewares):
+            def wrap(m: ClientMiddlewareFunc, n: Callable):
+                async def wrapped(req: JarpcRequest, handler: Callable) -> Any:
+                    async def call_next(r: JarpcRequest) -> Any:
+                        return await n(r, handler)
+                    return await m(req, call_next)
+                return wrapped
+            stack = wrap(mw, stack)
+            
+        return stack
 
-        return wrapped
-
-    def simple_call(self, method_name: str, **params) -> Any:
-        """Alias for `self.__call__`."""
-        return self(method_name=method_name, params=params)
-
-    def __call__(
+    async def __call__(
         self,
         method_name: str,
-        params: RequestT,
+        params: Any,
         ts: float | None = None,
         ttl: float | None = None,
         request_id: str | None = None,
         rsvp: bool = True,
         durable: bool = False,
+        meta: dict[str, Any] = None,
+        generic_request_type: type = Any,
+        generic_response_type: type = Any,
         **transport_kwargs
-    ) -> JarpcResponse:
-        """Makes a synchronous JARPC request."""
-        request = self._prepare_request(
-            method_name, params, ts, ttl, request_id, rsvp, durable
+    ):
+        combined_meta = (meta_context_var.get({}) or {}) | (meta or {})
+        request: JarpcRequest = self._prepare_request(
+            method_name, params, ts, ttl, request_id, rsvp, durable, combined_meta
         )
-        request_string = request.model_dump_json()
+        
+        async def _endpoint_handler(req: JarpcRequest) -> JarpcResponse | None:
+            request_string = req.model_dump_json(exclude_unset=True)
+            try:
+                response_string = await self._transport(
+                    request_string, req, **transport_kwargs
+                )
+            except JarpcError:
+                raise
+            except Exception as e:
+                raise JarpcServerError(e)
+            return self._parse_response(response_string, req.rsvp, generic_response_type)
 
-        try:
-            response_string = self._transport(
-                request_string, request, **transport_kwargs
-            )
+        return await self._middleware_stack(request, _endpoint_handler)
 
-        # Allow only JarpcError and its subclasses to be raised
-        except JarpcError:
-            raise
-        except Exception as e:
-            # Unexpected exception
-            raise JarpcServerError(e)
+    def __getattr__(self, name: str) -> Callable[..., Awaitable[Any]]:
+        async def method_wrapper(*args, **kwargs) -> Any:
+            service_keys = {"ts", "ttl", "request_id", "rsvp", "durable", "meta"}
+            service_kwargs = {k: kwargs.pop(k) for k in list(kwargs.keys()) if k in service_keys}
+            return await self(method_name=name, params=kwargs, **service_kwargs)
 
-        return self._parse_response(response_string, rsvp)
+        return method_wrapper
+
+    def simple_call(self, method_name: str, **params) -> Any:
+        """Alias for `self.__call__`."""
+        return self(method_name=method_name, params=params)
 
     def _prepare_request(
         self,
@@ -182,92 +214,9 @@ class JarpcClient:
                 return response.result
             else:
                 error = response.error
-                jarpcdantic_exceptions.raise_exception(
+                self.exception_manager.raise_exception(
                     code=error.get("code"),
-                    data=error.get("data"),
+                    data=error.get("error") or error.get("data"),
                     message=error.get("message"),
                 )
         return None
-
-
-class AsyncJarpcClient(JarpcClient):
-    """
-    Asynchronous JARPC Client implementation.
-
-    To make RPC it requires async transport.
-    Transport gets JARPC request as string, JarpcRequest-object and kwargs given with client call.
-    If rsvp is True, transport must return JARPC response string, otherwise transport may not return any result.
-    Transport's exceptions will be overwritten with `JarpcServerError` unless they are `JarpcError` subclasses.
-
-    Example of usage with python "aiohttp" library:
-    ```
-    async def aiohttp_transport(request_string, request, timeout=60.0):
-        try:
-            async with aiohttp.ClientSession() as session:
-                response = await session.post(url='https://kitchen.org/jsonrpc', data=request_string, timeout=timeout)
-                return await response.text()
-        except TimeoutError:
-            raise JarpcTimeout
-
-    kitchen = AsyncJarpcClient(transport=aiohttp_transport)
-    salad = await kitchen(method='cook_salad', params=dict(name='Caesar'), request_id='1', timeout=15)
-    ```
-
-    You can also define transport as class:
-    ```
-    class AiohttpTransport:
-        def __init__(self, session, url, headers=None):
-            self.session = session
-            self.url = url
-            self.headers = headers or {}
-        async def __call__(self, request_string, request, timeout=60.0):
-            try:
-                response = await session.post(url=self.url, headers=self.headers, data=request_string, timeout=timeout)
-                return await response.text()
-            except TimeoutError:
-                raise JarpcTimeout
-
-    async with aiohttp.ClientSession() as session:
-        transport = AiohttpTransport(session=session, url='https://kitchen.org/jsonrpc',
-                                     headers={'Content-Type': 'application/json'})
-        kitchen = AsyncJarpcClient(transport=transport)
-        salad = await kitchen(method='cook_salad', params=dict(name='Caesar'), request_id='1', timeout=15)
-    ```
-
-    If you don't need to pass JARPC meta params and transport kwargs, you can use method-like calling syntax:
-    ```
-    salad = await kitchen.cook_salad(name='Caesar')
-    ```
-    """
-
-    async def __call__(
-        self,
-        method_name: str,
-        params: RequestT,
-        ts: float | None = None,
-        ttl: float | None = None,
-        request_id: str | None = None,
-        rsvp: bool = True,
-        durable: bool = False,
-        meta: dict[str, Any] = None,
-        generic_request_type: Type[RequestT] = Any,
-        generic_response_type: Type[ResponseT] = Any,
-        **transport_kwargs
-    ) -> ResponseT:
-        combined_meta = (meta_context_var.get({}) or {}) | (meta or {})
-
-        request: JarpcRequest[generic_request_type] = self._prepare_request(
-            method_name, params, ts, ttl, request_id, rsvp, durable, combined_meta
-        )
-        request_string = request.model_dump_json(exclude_unset=True)
-
-        try:
-            response_string = await self._transport(
-                request_string, request, **transport_kwargs
-            )
-        except JarpcError:
-            raise
-        except Exception as e:
-            raise JarpcServerError(e)
-
-        return self._parse_response(response_string, rsvp, generic_response_type)
