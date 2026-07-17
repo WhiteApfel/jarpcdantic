@@ -21,7 +21,7 @@ setup(
     version=get_version(),
     description="JSON Advanced RPC with Pydantic",
     packages=["jarpcdantic"],
-    requires=["pydantic"],
+    install_requires=[req for req in read("requirements.txt").splitlines() if req.strip()],
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
     maintainer="WhiteApfel",
