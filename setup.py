@@ -28,12 +28,11 @@ setup(
     maintainer_email="white@pfel.ru",
     url="https://github.com/whiteapfel/jarpcdantic/",
     download_url="https://pypi.org/project/jarpcdantic/",
-    license="Mozilla Public License 2.0",
+    license="MPL-2.0",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3.12",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
         "Topic :: Utilities",
     ],
 )
